@@ -218,4 +218,6 @@ node src/server.js
 
 ## License
 
-当前仓库未声明单独的许可证，如需开源或分发，请按你的实际需求补充许可证文件。
+ 本项目采用 `MIT License`。
+
+ 详细内容见仓库根目录下的 `LICENSE` 文件。
