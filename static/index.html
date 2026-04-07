@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BloodHound Viewer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ Loading Overlay ============ -->
+  <div v-if="loading" class="loading-overlay"><div class="loading-spinner"></div></div>
+
+  <!-- ============ Top Nav (always visible) ============ -->
+  <nav class="top-nav">
+    <div class="nav-left">
+      <a href="#" class="nav-logo" @click.prevent>BloodHound Viewer</a>
+    </div>
+    <div class="nav-center">
+      <a v-for="t in tabs" :key="t.key" href="#"
+         :class="{ active: currentTab === t.key }"
+         @click.prevent="switchTab(t.key)">{{ t.label }}</a>
+    </div>
+    <div class="nav-right">
+      <!-- Dataset selector -->
+      <div class="dataset-selector-wrap" @click.stop>
+        <button class="btn btn-sm" :class="{ active: showDatasetSelector }"
+                @click="showDatasetSelector = !showDatasetSelector">
+          数据集 <span v-if="datasets.length" class="domain-badge">{{ loadedDatasetIds.length }}/{{ datasets.length }}</span>
+        </button>
+        <div v-if="showDatasetSelector" class="domain-dropdown" style="width:380px">
+          <div class="domain-dd-header">
+            <span class="fp-title">数据集管理</span>
+            <button class="btn btn-icon btn-xs" @click="showDatasetSelector = false">&times;</button>
+          </div>
+          <div class="domain-dd-actions">
+            <button class="btn btn-xs" @click="loadAllDatasets">全选</button>
+            <button class="btn btn-xs" @click="unloadAllDatasets">全不选</button>
+            <span class="fp-count">{{ loadedDatasetIds.length }} / {{ datasets.length }}</span>
+          </div>
+          <div class="domain-dd-list">
+            <label v-for="ds in datasets" :key="ds.id" class="fp-item" style="align-items:flex-start">
+              <input type="checkbox" :checked="loadedDatasetIds.includes(ds.id)"
+                     @change="toggleDataset(ds.id)" style="margin-top:2px">
+              <div style="flex:1;min-width:0">
+                <div class="fp-item-text" style="font-weight:500">{{ ds.name }}</div>
+                <div style="font-size:11px;color:var(--text-light)">{{ ds.counts.users }}用户 {{ ds.counts.groups }}组 {{ ds.counts.computers }}计算机</div>
+                <input type="text" class="ds-note-input" :value="ds.note || ''"
+                       placeholder="添加备注..."
+                       @click.stop
+                       @change="saveNote(ds.id, $event.target.value)">
+              </div>
+              <button class="btn btn-icon btn-xs" style="color:var(--danger);flex-shrink:0"
+                      @click.prevent.stop="deleteDataset(ds.id)" title="删除">✕</button>
+            </label>
+            <div v-if="!datasets.length" class="fp-empty">暂无数据集，请上传文件</div>
+          </div>
+        </div>
+      </div>
+      <!-- Domain filter -->
+      <div class="domain-dropdown-wrap" @click.stop v-if="allDomains.length">
+        <button class="btn btn-sm" :class="{ active: showDomainDropdown }" @click="showDomainDropdown = !showDomainDropdown">
+          域筛选 <span v-if="checkedDomains.length < allDomains.length" class="domain-badge">{{ checkedDomains.length }}/{{ allDomains.length }}</span>
+        </button>
+        <div v-if="showDomainDropdown" class="domain-dropdown">
+          <div class="domain-dd-header">
+            <span class="fp-title">域筛选</span>
+            <button class="btn btn-icon btn-xs" @click="showDomainDropdown = false">&times;</button>
+          </div>
+          <div class="domain-dd-actions">
+            <button class="btn btn-xs" @click="setAllDomains(true)">全选</button>
+            <button class="btn btn-xs" @click="setAllDomains(false)">全不选</button>
+            <span class="fp-count">{{ checkedDomains.length }} / {{ allDomains.length }}</span>
+          </div>
+          <div class="domain-dd-list">
+            <label v-for="d in allDomains" :key="d" class="fp-item">
+              <input type="checkbox" :value="d" v-model="checkedDomains" @change="onDomainChange">
+              <span class="fp-item-text">{{ d }}</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <!-- Upload button -->
+      <button class="btn btn-sm" @click="showUploadModal = true">上传</button>
+    </div>
+  </nav>
+
+  <!-- ============ Upload Modal ============ -->
+  <div v-if="showUploadModal" class="modal-backdrop" @click.self="showUploadModal = false">
+    <div class="upload-modal">
+      <div class="upload-modal-header">
+        <h3>上传数据文件</h3>
+        <button class="btn btn-icon btn-xs" @click="showUploadModal = false">&times;</button>
+      </div>
+      <div class="upload-zone" :class="{ dragover: dragging }"
+           @click="$refs.fileInput.click()"
+           @dragover.prevent="dragging = true"
+           @dragleave.prevent="dragging = false"
+           @drop.prevent="onDrop">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <span>拖拽文件到此区域，或<strong>点击选择</strong></span>
+        <span class="upload-hint">支持 .json / .zip（多文件可一次上传）</span>
+        <input ref="fileInput" type="file" multiple accept=".json,.zip" hidden @change="onFileSelect">
+      </div>
+      <div v-if="uploading" class="upload-progress">
+        <div class="upload-progress-bar"><div class="upload-progress-fill"></div></div>
+        <span>上传解析中...</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Main Content ============ -->
+  <div class="main-layout">
+    <main class="content">
+
+      <!-- Empty state -->
+      <div v-if="!hasData" class="empty-state">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <h2>暂无数据</h2>
+        <p>点击右上角 "上传" 添加 BloodHound JSON/ZIP 文件，或在 "数据集" 中勾选已上传的数据集</p>
+      </div>
+
+      <!-- Dashboard -->
+      <template v-if="hasData && currentTab === 'dashboard'">
+        <h2 style="margin:0 0 16px">{{ datasetName }}</h2>
+        <div class="dashboard-cards">
+          <div class="dash-card" v-for="c in dashCards" :key="c.tab" @click="switchTab(c.tab)">
+            <div class="dash-card-label">{{ c.label }}</div>
+            <div class="dash-card-value">{{ c.count }}</div>
+          </div>
+        </div>
+      </template>
+
+      <!-- Table views -->
+        <template v-if="hasData && isTableTab">
+          <!-- Toolbar -->
+          <div class="table-toolbar">
+            <div class="toolbar-left">
+              <input type="text" class="search-input" placeholder="全局搜索..."
+                     :value="td.search" @input="onSearch($event.target.value)">
+              <button class="btn btn-sm" @click="showColManager = !showColManager">字段设置</button>
+            </div>
+            <div class="toolbar-right">
+              <span class="filter-status">显示 {{ td.rows.length }} / {{ td.total }} 条</span>
+              <div class="page-size-ctrl">
+                <span>每页</span>
+                <input type="number" :value="td.pageSize" min="10" max="1000"
+                       @change="td.pageSize = Math.max(10, Math.min(1000, +$event.target.value)); td.page = 1; fetchData()"
+                       @keydown.enter="$event.target.blur()">
+                <span>条</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Table -->
+          <div class="table-wrap" ref="tableWrapEl">
+            <table class="data-table" :style="tableStyle">
+              <colgroup>
+                <col v-for="col in visCols" :key="`col-${col.key}`"
+                     :style="effectiveColStyles[col.key] || {}">
+              </colgroup>
+              <thead>
+                <tr>
+                  <th v-for="(col, ci) in visCols" :key="col.key"
+                      :class="[sortClass(col.key), { 'drag-over': dragOverCol === col.key }]"
+                      :style="effectiveColStyles[col.key] || {}"
+                      draggable="true"
+                      @dragstart="onColDragStart(ci, $event)"
+                      @dragover.prevent="onColDragOver(col.key)"
+                      @dragleave="onColDragLeave(col.key)"
+                      @drop.prevent="onColDrop(ci)"
+                      @dragend="onColDragEnd"
+                      @click="toggleSort(col.key)">
+                    <span class="th-grip">⠿</span>
+                    <span class="th-text">{{ col.title }}</span>
+                    <span class="sort-icon"></span>
+                    <span class="filter-popover-wrap" @click.stop>
+                      <button class="th-filter-btn" :class="{ active: hasActiveFilter(col.key) }"
+                              @click="openPopover(col.key, $event)" title="列筛选">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+                      </button>
+                      <div v-if="popoverCol === col.key" ref="popoverEl" class="filter-popover" @click.stop
+                           :style="{ top: popoverPos.top, left: popoverPos.left }">
+                        <div class="fp-header">
+                          <span class="fp-title">筛选: {{ col.filter_title || col.title }}</span>
+                          <button class="btn btn-icon btn-xs" @click="cancelPopover">&times;</button>
+                        </div>
+                        <div class="fp-search">
+                          <input type="text" placeholder="搜索值..."
+                                 :value="popoverSearch" @input="popoverSearch = $event.target.value">
+                        </div>
+                        <div v-if="popoverLoading" class="fp-loading">加载中...</div>
+                        <template v-else>
+                          <div class="fp-actions">
+                            <button class="btn btn-xs" @click="popoverSelectAll">全选</button>
+                            <button class="btn btn-xs" @click="popoverDeselectAll">全不选</button>
+                            <span class="fp-count">{{ popoverChecked.size }} / {{ popoverValues.length }}</span>
+                          </div>
+                          <div class="fp-list">
+                            <label v-for="v in popoverFiltered" :key="v||'__empty__'" class="fp-item">
+                              <input type="checkbox" :checked="popoverChecked.has(v)"
+                                     @change="togglePopoverItem(v)">
+                              <span class="fp-item-text">{{ v || '(空白)' }}</span>
+                              <span class="fp-item-count">{{ popoverCounts[v] || 0 }}</span>
+                            </label>
+                            <div v-if="!popoverFiltered.length" class="fp-empty">无匹配项</div>
+                          </div>
+                          <div class="fp-footer">
+                            <button class="btn btn-xs" @click="resetPopoverFilter(col.key, $event)">重置</button>
+                            <button class="btn btn-xs btn-primary" @click="applyPopover">应用</button>
+                          </div>
+                        </template>
+                      </div>
+                    </span>
+                    <div class="th-resize" @mousedown="onResizeStart(col.key, $event)"></div>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="!td.rows.length" class="empty-row">
+                  <td :colspan="visCols.length">无匹配数据</td>
+                </tr>
+                <tr v-for="(row, ri) in td.rows" :key="row.object_id || ri">
+                  <td v-for="col in visCols" :key="col.key"
+                      :class="{ 'object-name-cell': col.key === 'name' && row.object_id }"
+                      :style="effectiveColStyles[col.key] || {}"
+                      :title="col.key === 'sid' ? String(row.sid_full || row.sid || '') : String(row[col.key] ?? '')"
+                      @contextmenu.prevent="col.key === 'name' && row.object_id && showContextMenu($event, row.object_id)">
+                    <object-label v-if="col.key === 'name' && row.object_id"
+                                  :name="row.name" :type="row.type" :object-id="row.object_id"></object-label>
+                    <span v-else-if="col.key === 'flag'" v-html="renderFlags(row[col.key])"></span>
+                    <span v-else-if="isTimestampDisplayValue(row[col.key])" class="timestamp-display">{{ formatTimestampDisplay(row[col.key]) }}</span>
+                    <template v-else>{{ row[col.key] ?? '' }}</template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Pagination -->
+          <div v-if="td.totalPages > 1" class="pagination">
+            <button :disabled="td.page <= 1" @click="gotoPage(1)">&laquo;</button>
+            <button :disabled="td.page <= 1" @click="gotoPage(td.page - 1)">&lsaquo;</button>
+            <button v-for="p in pageRange" :key="p" :class="{ active: p === td.page }"
+                    @click="gotoPage(p)">{{ p }}</button>
+            <button :disabled="td.page >= td.totalPages" @click="gotoPage(td.page + 1)">&rsaquo;</button>
+            <button :disabled="td.page >= td.totalPages" @click="gotoPage(td.totalPages)">&raquo;</button>
+            <span class="page-info">第 {{ td.page }} / {{ td.totalPages }} 页</span>
+          </div>
+        </template>
+
+        <!-- Users by Group -->
+        <template v-if="hasData && currentTab === 'users-by-group'">
+          <h2 style="margin:0 0 16px">Users by Group</h2>
+          <div v-if="!groupedData.length" class="empty-state">无分组数据</div>
+          <div v-for="(sec, si) in groupedData" :key="si" class="group-section">
+            <div class="group-header" :class="{ collapsed: sec._collapsed }" @click="sec._collapsed = !sec._collapsed">
+              <span class="group-toggle">&#9660;</span>
+              <span>{{ sec.group.name }}</span>
+              <span class="group-count">{{ sec.member_count }} members</span>
+            </div>
+            <div class="group-body" v-show="!sec._collapsed">
+              <table class="data-table">
+                <thead><tr><th>Name</th><th>SAM</th><th>Domain</th><th>Type</th><th>Description</th></tr></thead>
+                <tbody>
+                  <tr v-for="(m, mi) in sec.members" :key="mi">
+                    <td class="object-name-cell" @contextmenu.prevent="m.object_id && showContextMenu($event, m.object_id)">
+                      <object-label :name="m.name" :type="m.type" :object-id="m.object_id"></object-label>
+                    </td>
+                    <td>{{ m.samaccountname }}</td>
+                    <td>{{ m.domain }}</td>
+                    <td>{{ m.type }}</td>
+                    <td>{{ m.description }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
+
+        <!-- Computers by OS -->
+        <template v-if="hasData && currentTab === 'computers-by-os'">
+          <h2 style="margin:0 0 16px">Computers by OS</h2>
+          <div v-if="!groupedData.length" class="empty-state">无数据</div>
+          <div v-for="(sec, si) in groupedData" :key="si" class="group-section">
+            <div class="group-header" :class="{ collapsed: sec._collapsed }" @click="sec._collapsed = !sec._collapsed">
+              <span class="group-toggle">&#9660;</span>
+              <span>{{ sec.os }}</span>
+              <span class="group-count">{{ sec.count }} computers</span>
+            </div>
+            <div class="group-body" v-show="!sec._collapsed">
+              <table class="data-table">
+                <thead><tr><th>Name</th><th>SAM</th><th>Domain</th><th>Description</th><th>Flags</th><th>Is DC</th></tr></thead>
+                <tbody>
+                  <tr v-for="(c, ci) in sec.computers" :key="ci">
+                    <td class="object-name-cell" @contextmenu.prevent="c.object_id && showContextMenu($event, c.object_id)">
+                      <object-label :name="c.name" :type="'computer'" :object-id="c.object_id"></object-label>
+                    </td>
+                    <td>{{ c.samaccountname }}</td>
+                    <td>{{ c.domain }}</td>
+                    <td>{{ c.description }}</td>
+                    <td><span v-html="renderFlags(c.flag)"></span></td>
+                    <td>{{ c.isdc }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
+
+      </main>
+    </div>
+
+  <!-- ============ Column Manager ============ -->
+  <div v-if="showColManager" class="col-manager-popup">
+    <div class="col-manager-header">
+      <h3>字段设置</h3>
+      <button class="btn btn-icon" @click="showColManager = false">&#10005;</button>
+    </div>
+    <div class="col-manager-body">
+      <label v-for="col in td.columns" :key="col.key" class="col-manager-item">
+        <input type="checkbox" :checked="isColVisible(col)" @change="toggleCol(col)">
+        {{ col.title }}
+      </label>
+    </div>
+  </div>
+
+  <!-- ============ Object Detail Modal ============ -->
+  <template v-if="detailVisible">
+    <div class="detail-overlay" @click="closeDetail"></div>
+    <div class="detail-panel">
+      <div class="detail-header">
+        <button v-if="detailStack.length > 1" class="btn btn-icon" @click="detailBack" title="返回">&#8592;</button>
+        <h3 class="detail-title">{{ currentDetail?.name }} ({{ currentDetail?.type }})</h3>
+        <button class="btn btn-icon" @click="closeDetail" title="关闭">&#10005;</button>
+      </div>
+      <div class="detail-body" v-if="currentDetail">
+        <!-- Info -->
+        <div class="detail-info">
+          <div v-for="item in currentDetail.info" :key="item.label" class="detail-info-row">
+            <span class="detail-label">{{ item.label }}</span>
+            <span class="detail-value" :class="{ 'timestamp-display': isTimestampDisplayValue(item.value) }">{{ formatTimestampDisplay(item.value) }}</span>
+          </div>
+        </div>
+        <!-- Relation tabs -->
+        <div v-if="activeRelTabs.length" class="detail-rel-tabs">
+          <button v-for="rt in activeRelTabs" :key="rt[0]"
+                  class="detail-rel-tab" :class="{ active: activeRelKey === rt[0] }"
+                  @click="activeRelKey = rt[0]">
+            {{ rt[1] }} ({{ currentDetail.relations[rt[0]].length }})
+          </button>
+        </div>
+        <div v-if="activeRelKey && currentDetail.relations[activeRelKey]" class="detail-rel-list">
+          <div v-for="(item, ii) in currentDetail.relations[activeRelKey]" :key="ii" class="detail-rel-item">
+            <object-label :name="item.name" :type="item.type" :object-id="item.object_id"
+                          @contextmenu.prevent.stop="item.object_id && showContextMenu($event, item.object_id)"></object-label>
+            <span v-if="item.meta" class="detail-rel-meta">{{ item.meta }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ============ Context Menu ============ -->
+  <div v-if="ctxMenu.visible" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }">
+    <div class="ctx-menu-item" @click="ctxOpenDetail">查看详细信息</div>
+  </div>
+
+</div>
+
+<script src="vue.global.prod.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
