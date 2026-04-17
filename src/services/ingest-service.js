@@ -8,8 +8,7 @@ const {
   buildComputersByOs,
   buildObjectDetailData,
   buildUsersByGroup,
-  datasetKeyFromName,
-  loadJsonEntriesFromText,
+  loadBloodHoundCollectionFromText,
   normalizeComputers,
   normalizeDomains,
   normalizeGroups,
@@ -76,19 +75,23 @@ function ingestPairs(pairs) {
         .sort((left, right) => left.entryName.localeCompare(right.entryName, undefined, { sensitivity: 'base' }));
 
       for (const entry of entries) {
-        const key = datasetKeyFromName(path.posix.basename(entry.entryName));
+        if (!String(entry.entryName || '').toLowerCase().endsWith('.json')) {
+          continue;
+        }
+
+        const { key, entries: rows } = loadBloodHoundCollectionFromText(decodeBuffer(entry.getData()));
         if (!key) {
           continue;
         }
-        raw[key].push(...loadJsonEntriesFromText(decodeBuffer(entry.getData())));
+        raw[key].push(...rows);
       }
       continue;
     }
 
     if (lowerName.endsWith('.json')) {
-      const key = datasetKeyFromName(path.basename(filename));
+      const { key, entries } = loadBloodHoundCollectionFromText(decodeBuffer(content));
       if (key) {
-        raw[key].push(...loadJsonEntriesFromText(decodeBuffer(content)));
+        raw[key].push(...entries);
       }
     }
   }
@@ -101,7 +104,7 @@ function ingestPairs(pairs) {
   if (![users, groups, computers, domains].some((rows) => rows.length > 0)) {
     throw createHttpError(
       400,
-      '未识别到有效数据。请上传 BloodHound 格式的 JSON 文件 （文件名需以 _users/_groups/_computers/_domains.json 结尾）或包含这些文件的 ZIP。'
+      '未识别到有效数据。请上传 BloodHound 导出的 JSON 文件或包含这些文件的 ZIP，系统会根据文件内容自动识别 users/groups/computers/domains 类型。'
     );
   }
 

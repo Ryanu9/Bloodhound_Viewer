@@ -102,38 +102,134 @@ function formatDateUtcPlus8(date) {
   return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())} ${pad2(shifted.getUTCHours())}:${pad2(shifted.getUTCMinutes())}:${pad2(shifted.getUTCSeconds())}`;
 }
 
-function loadJsonEntriesFromText(text) {
-  const payload = JSON.parse(stripBom(text));
-
-  if (Array.isArray(payload)) {
-    return payload.filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+function objectEntriesFromValue(value) {
+  if (!Array.isArray(value)) {
+    return [];
   }
 
-  if (payload && typeof payload === 'object') {
-    const data = payload.data;
-    if (Array.isArray(data)) {
-      return data.filter((item) => item && typeof item === 'object' && !Array.isArray(item));
-    }
-  }
-
-  return [];
+  return value.filter((item) => item && typeof item === 'object' && !Array.isArray(item));
 }
 
-function datasetKeyFromName(name) {
-  const lower = String(name || '').toLowerCase();
-  if (lower.endsWith('_users.json')) {
+function normalizeDatasetKey(value) {
+  const lower = String(value || '').trim().toLowerCase();
+  if (lower === 'user' || lower === 'users') {
     return 'users';
   }
-  if (lower.endsWith('_groups.json')) {
+  if (lower === 'group' || lower === 'groups') {
     return 'groups';
   }
-  if (lower.endsWith('_computers.json')) {
+  if (lower === 'computer' || lower === 'computers') {
     return 'computers';
   }
-  if (lower.endsWith('_domains.json')) {
+  if (lower === 'domain' || lower === 'domains') {
     return 'domains';
   }
   return null;
+}
+
+function hasOwn(object, key) {
+  return !!object && Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function hasAnyOwn(object, keys) {
+  return (keys || []).some((key) => hasOwn(object, key));
+}
+
+function detectDatasetKeyFromEntries(entries) {
+  const scores = {
+    users: 0,
+    groups: 0,
+    computers: 0,
+    domains: 0,
+  };
+
+  for (const item of (entries || []).slice(0, 25)) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      continue;
+    }
+
+    const props = item.Properties && typeof item.Properties === 'object' && !Array.isArray(item.Properties)
+      ? item.Properties
+      : {};
+
+    if (
+      hasAnyOwn(item, ['Trusts', 'Links', 'ChildObjects', 'GPOChanges'])
+      || hasAnyOwn(props, ['domainsid', 'functionallevel', 'machineaccountquota', 'minpwdlength', 'pwdhistorylength'])
+    ) {
+      scores.domains += 4;
+    }
+
+    if (Array.isArray(item.Members) || hasAnyOwn(props, ['groupscope'])) {
+      scores.groups += 4;
+    }
+
+    if (
+      hasAnyOwn(item, ['Sessions', 'PrivilegedSessions', 'RegistrySessions', 'NtlmSessions', 'LocalAdmins', 'RemoteDesktopUsers', 'DcomUsers', 'PSRemoteUsers'])
+      || hasAnyOwn(props, ['operatingsystem', 'haslaps', 'isdc', 'isreadonlydc', 'trustedtoauth'])
+    ) {
+      scores.computers += 4;
+    }
+
+    if (
+      hasAnyOwn(item, ['SPNTargets'])
+      || hasAnyOwn(props, ['displayname', 'email', 'title', 'hasspn', 'dontreqpreauth', 'smartcardrequired', 'passwordexpired', 'pwdneverexpires', 'sensitive'])
+    ) {
+      scores.users += 4;
+    }
+
+    const samAccountName = String(props.samaccountname || '');
+    if (samAccountName) {
+      if (samAccountName.endsWith('$')) {
+        scores.computers += 2;
+      } else {
+        scores.users += 1;
+        scores.groups += 1;
+      }
+    }
+
+    if (hasOwn(item, 'PrimaryGroupSID')) {
+      if (samAccountName.endsWith('$') || hasOwn(props, 'operatingsystem')) {
+        scores.computers += 2;
+      } else {
+        scores.users += 2;
+      }
+    }
+  }
+
+  const ranked = Object.entries(scores)
+    .filter(([, score]) => score > 0)
+    .sort((left, right) => right[1] - left[1]);
+
+  if (!ranked.length) {
+    return null;
+  }
+
+  if (ranked.length > 1 && ranked[0][1] === ranked[1][1]) {
+    return null;
+  }
+
+  return ranked[0][0];
+}
+
+function loadBloodHoundCollectionFromText(text) {
+  const payload = JSON.parse(stripBom(text));
+  const entries = Array.isArray(payload)
+    ? objectEntriesFromValue(payload)
+    : payload && typeof payload === 'object'
+      ? objectEntriesFromValue(payload.data)
+      : [];
+  const metaType = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? normalizeDatasetKey((payload.meta && payload.meta.type) || payload.type)
+    : null;
+
+  return {
+    key: metaType || detectDatasetKeyFromEntries(entries),
+    entries,
+  };
+}
+
+function loadJsonEntriesFromText(text) {
+  return loadBloodHoundCollectionFromText(text).entries;
 }
 
 function displayValue(value) {
@@ -937,7 +1033,7 @@ module.exports = {
   buildComputersByOs,
   buildObjectDetailData,
   buildUsersByGroup,
-  datasetKeyFromName,
+  loadBloodHoundCollectionFromText,
   loadJsonEntriesFromText,
   normalizeComputers,
   normalizeDomains,
