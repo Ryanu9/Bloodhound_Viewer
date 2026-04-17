@@ -16,6 +16,21 @@ const app = createApp({
   setup() {
     /* ---- state ---- */
     const loading = ref(false);
+    // Delayed visibility to avoid "flash" on fast requests (<250ms)
+    const loadingVisible = ref(false);
+    let loadingTimer = null;
+    watch(loading, (v) => {
+      if (v) {
+        if (loadingTimer) return;
+        loadingTimer = setTimeout(() => {
+          loadingVisible.value = true;
+          loadingTimer = null;
+        }, 250);
+      } else {
+        if (loadingTimer) { clearTimeout(loadingTimer); loadingTimer = null; }
+        loadingVisible.value = false;
+      }
+    });
     const uploading = ref(false);
     const dragging = ref(false);
     const loadedDatasetIds = ref([]);     // active dataset IDs
@@ -46,7 +61,130 @@ const app = createApp({
     const activeRelKey = ref('');
 
     // context menu
-    const ctxMenu = reactive({ visible: false, x: 0, y: 0, objectId: '' });
+    const ctxMenu = reactive({ visible: false, x: 0, y: 0, objectId: '', meta: null });
+
+    // favorites (persisted in localStorage, dataset-agnostic)
+    const FAV_STORAGE_KEY = 'bh_viewer_favorites';
+    const favorites = ref([]);
+    function loadFavorites() {
+      try {
+        const raw = localStorage.getItem(FAV_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        favorites.value = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        favorites.value = [];
+      }
+    }
+    function persistFavorites() {
+      try { localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(favorites.value)); } catch {}
+    }
+    function isFavorite(oid) {
+      return !!oid && favorites.value.some(f => f.object_id === oid);
+    }
+    function addFavorite(meta) {
+      const oid = meta && meta.object_id;
+      if (!oid || isFavorite(oid)) return;
+      favorites.value = [
+        {
+          object_id: oid,
+          name: meta.name || oid,
+          type: meta.type || '',
+          domain: meta.domain || '',
+          description: meta.description || '',
+          added_at: Date.now(),
+        },
+        ...favorites.value,
+      ];
+      persistFavorites();
+    }
+    function removeFavorite(oid) {
+      if (!oid) return;
+      favorites.value = favorites.value.filter(f => f.object_id !== oid);
+      persistFavorites();
+    }
+    function toggleFavorite(meta) {
+      if (!meta || !meta.object_id) return;
+      if (isFavorite(meta.object_id)) removeFavorite(meta.object_id);
+      else addFavorite(meta);
+    }
+    function updateFavoriteNote(oid, note) {
+      if (!oid) return;
+      const idx = favorites.value.findIndex(f => f.object_id === oid);
+      if (idx < 0) return;
+      const next = favorites.value.slice();
+      next[idx] = { ...next[idx], note: String(note || '') };
+      favorites.value = next;
+      persistFavorites();
+    }
+    function formatFavoriteTime(ts) {
+      if (!ts) return '';
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return '';
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    // favorites table column widths (persisted)
+    const FAV_COL_WIDTHS_KEY = 'bh_viewer_fav_col_widths';
+    const favColWidths = reactive({
+      name: 260,
+      type: 100,
+      domain: 180,
+      description: 0, // 0 means auto-flex (remaining space)
+      note: 220,
+      added_at: 160,
+      action: 60,
+    });
+    function loadFavColWidths() {
+      try {
+        const raw = localStorage.getItem(FAV_COL_WIDTHS_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          Object.keys(parsed).forEach((k) => {
+            if (k in favColWidths && Number.isFinite(parsed[k])) favColWidths[k] = parsed[k];
+          });
+        }
+      } catch {}
+    }
+    function persistFavColWidths() {
+      try { localStorage.setItem(FAV_COL_WIDTHS_KEY, JSON.stringify({ ...favColWidths })); } catch {}
+    }
+    function favColStyle(key) {
+      const w = favColWidths[key];
+      if (!w || w <= 0) return {};
+      const px = `${w}px`;
+      return { width: px, minWidth: px, maxWidth: px };
+    }
+    let favResizeCol = null;
+    let favResizeStartX = 0;
+    let favResizeStartW = 0;
+    function onFavResizeMove(e) {
+      if (!favResizeCol) return;
+      const dx = e.clientX - favResizeStartX;
+      favColWidths[favResizeCol] = Math.max(40, Math.round(favResizeStartW + dx));
+    }
+    function onFavResizeEnd() {
+      if (!favResizeCol) return;
+      favResizeCol = null;
+      document.removeEventListener('mousemove', onFavResizeMove);
+      document.removeEventListener('mouseup', onFavResizeEnd);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      persistFavColWidths();
+    }
+    function onFavResizeStart(colKey, e) {
+      e.preventDefault();
+      e.stopPropagation();
+      favResizeCol = colKey;
+      favResizeStartX = e.clientX;
+      const th = e.target.closest('th');
+      favResizeStartW = th ? th.offsetWidth : (favColWidths[colKey] || 100);
+      document.addEventListener('mousemove', onFavResizeMove);
+      document.addEventListener('mouseup', onFavResizeEnd);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
 
     // per-tab data
     const savedTabs = {};
@@ -183,6 +321,7 @@ const app = createApp({
       { key: 'domains', label: '域' },
       { key: 'users-by-group', label: '按组查看用户' },
       { key: 'computers-by-os', label: '按系统查看计算机' },
+      { key: 'favorites', label: '收藏' },
     ];
 
     const tableTabs = ['users', 'groups', 'computers', 'domains'];
@@ -748,8 +887,14 @@ const app = createApp({
     }
 
     /* ---- context menu ---- */
-    function showContextMenu(e, oid) {
+    function showContextMenu(e, oid, meta) {
       ctxMenu.objectId = oid;
+      ctxMenu.meta = meta && typeof meta === 'object' ? {
+        name: meta.name,
+        type: meta.type,
+        domain: meta.domain,
+        description: meta.description,
+      } : null;
       ctxMenu.x = e.clientX;
       ctxMenu.y = e.clientY;
       ctxMenu.visible = true;
@@ -759,10 +904,26 @@ const app = createApp({
       ctxMenu.visible = false;
       if (oid) openDetail(oid);
     }
+    function ctxToggleFavorite() {
+      const oid = ctxMenu.objectId;
+      const meta = ctxMenu.meta || {};
+      ctxMenu.visible = false;
+      if (!oid) return;
+      toggleFavorite({
+        object_id: oid,
+        name: meta.name,
+        type: meta.type,
+        domain: meta.domain,
+        description: meta.description,
+      });
+    }
+    const ctxIsFavorite = computed(() => isFavorite(ctxMenu.objectId));
 
     /* ---- detail ---- */
     async function openDetail(oid) {
-      loading.value = true;
+      // Avoid global loading overlay flash when navigating within an already-open detail panel
+      const alreadyOpen = detailVisible.value;
+      if (!alreadyOpen) loading.value = true;
       try {
         const obj = await api(`/datasets/${mergedId.value}/object/${encodeURIComponent(oid)}`);
         detailStack.value.push(obj);
@@ -772,7 +933,9 @@ const app = createApp({
         if (tabs.length) activeRelKey.value = tabs[0][0];
         detailVisible.value = true;
         document.body.style.overflow = 'hidden';
-      } finally { loading.value = false; }
+      } finally {
+        if (!alreadyOpen) loading.value = false;
+      }
     }
 
     function detailBack() {
@@ -928,6 +1091,8 @@ const app = createApp({
 
     /* ---- init ---- */
     onMounted(async () => {
+      loadFavorites();
+      loadFavColWidths();
       await loadDatasets();
       // auto-load all datasets
       if (datasets.value.length) {
@@ -940,7 +1105,7 @@ const app = createApp({
     });
 
     return {
-      loading, uploading, dragging,
+      loading, loadingVisible, uploading, dragging,
       loadedDatasetIds, hasData, datasetName, datasets,
       allDomains, checkedDomains, counts, showDomainDropdown,
       showDatasetSelector, showUploadModal,
@@ -961,7 +1126,9 @@ const app = createApp({
       isColVisible, toggleCol,
       isTimestampDisplayValue, formatTimestampDisplay,
       renderFlags, openDetail, detailBack, closeDetail,
-      ctxMenu, showContextMenu, ctxOpenDetail,
+      ctxMenu, showContextMenu, ctxOpenDetail, ctxToggleFavorite, ctxIsFavorite,
+      favorites, isFavorite, removeFavorite, formatFavoriteTime, updateFavoriteNote,
+      favColWidths, favColStyle, onFavResizeStart,
       // drag
       dragOverCol, onColDragStart, onColDragOver, onColDragLeave, onColDrop, onColDragEnd,
       colWidths, onResizeStart,
@@ -975,4 +1142,27 @@ const app = createApp({
 });
 
 app.component('object-label', ObjectLabel);
+
+// Auto-grow directive: makes textarea height follow content
+app.directive('autoheight', {
+  mounted(el) {
+    const fit = () => {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    el.__autofit = fit;
+    el.addEventListener('input', fit);
+    requestAnimationFrame(fit);
+  },
+  updated(el) {
+    if (el.__autofit) requestAnimationFrame(el.__autofit);
+  },
+  unmounted(el) {
+    if (el.__autofit) {
+      el.removeEventListener('input', el.__autofit);
+      el.__autofit = null;
+    }
+  },
+});
+
 app.mount('#app');

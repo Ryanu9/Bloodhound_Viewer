@@ -9,7 +9,7 @@ const ICON_SVG = {
 };
 
 export const ObjectLabel = {
-  props: ['name', 'type', 'objectId'],
+  props: ['name', 'type', 'objectId', 'favorite'],
   setup(props) {
     const cls = window.Vue.computed(() => {
       const type = String(props.type || '').toLowerCase();
@@ -35,5 +35,5 @@ export const ObjectLabel = {
       svgIcon,
     };
   },
-  template: '<span :class="cls"><span class="object-label__icon"><svg :viewBox="svgIcon.vb" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" :d="svgIcon.d"></path></svg></span><span class="object-label__text">{{ name }}</span></span>',
+  template: '<span :class="cls"><span class="object-label__icon"><svg :viewBox="svgIcon.vb" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" :d="svgIcon.d"></path></svg></span><span v-if="favorite" class="fav-star" title="已收藏">★</span><span class="object-label__text">{{ name }}</span></span>',
 };

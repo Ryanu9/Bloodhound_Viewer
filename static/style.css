@@ -97,6 +97,32 @@ button { font-family: inherit; cursor: pointer; }
 .ds-note-input:hover { border-color: var(--border); }
 .ds-note-input:focus { border-color: var(--primary); background: var(--bg-card); color: var(--text-dark); }
 
+/* --- Favorite star (between icon and name inside object-label) --- */
+.object-label .fav-star {
+    flex: 0 0 auto; color: #f5b301; font-size: 12px; line-height: 1;
+    user-select: none; pointer-events: none;
+}
+
+/* --- Favorite note input --- */
+.fav-note-input {
+    width: 100%; border: 1px solid transparent; border-radius: 3px;
+    padding: 3px 6px; font-size: 12px; color: var(--text-dark);
+    background: transparent; outline: none; box-sizing: border-box;
+    font-family: inherit; line-height: 1.5; resize: none;
+    white-space: pre-wrap; word-break: break-word; overflow: hidden;
+    min-height: 24px;
+}
+.fav-note-input:hover { border-color: var(--border); background: var(--bg-card); }
+.fav-note-input:focus { border-color: var(--primary); background: var(--bg-card); }
+
+/* --- Favorites table (wrap + resizable) --- */
+.favorites-table { width: 100%; table-layout: fixed; }
+.favorites-table th { cursor: default; }
+.favorites-table th:hover { background: #f1f5f9; }
+.favorites-table td { vertical-align: top; white-space: normal; word-break: break-word; overflow: visible; text-overflow: clip; max-width: none; }
+.favorites-table td.fav-desc-cell { white-space: pre-wrap; line-height: 1.5; }
+.favorites-table td.object-name-cell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 /* --- Navigation --- */
 .top-nav {
     background: var(--nav-bg); padding: 0 24px; display: flex; align-items: center;
@@ -390,8 +416,9 @@ button { font-family: inherit; cursor: pointer; }
 .detail-rel-list { font-size: 13px; }
 .detail-rel-item {
     display: flex; align-items: center; gap: 8px; padding: 6px 10px;
-    border-bottom: 1px solid var(--border-light); cursor: default;
+    border-bottom: 1px solid var(--border-light); cursor: pointer;
 }
+.detail-rel-item:hover { background: var(--primary-bg); }
 .detail-rel-item:last-child { border-bottom: none; }
 .detail-rel-item .object-label { cursor: pointer; }
 .detail-rel-item .object-label:hover .object-label__text { text-decoration: underline; }

@@ -10,7 +10,7 @@
 <div id="app">
 
   <!-- ============ Loading Overlay ============ -->
-  <div v-if="loading" class="loading-overlay"><div class="loading-spinner"></div></div>
+  <div v-if="loadingVisible" class="loading-overlay"><div class="loading-spinner"></div></div>
 
   <!-- ============ Top Nav (always visible) ============ -->
   <nav class="top-nav">
@@ -118,7 +118,7 @@
     <main class="content">
 
       <!-- Empty state -->
-      <div v-if="!hasData" class="empty-state">
+      <div v-if="!hasData && currentTab !== 'favorites'" class="empty-state">
         <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
@@ -232,9 +232,11 @@
                       :class="{ 'object-name-cell': col.key === 'name' && row.object_id }"
                       :style="effectiveColStyles[col.key] || {}"
                       :title="col.key === 'sid' ? String(row.sid_full || row.sid || '') : String(row[col.key] ?? '')"
-                      @contextmenu.prevent="col.key === 'name' && row.object_id && showContextMenu($event, row.object_id)">
-                    <object-label v-if="col.key === 'name' && row.object_id"
-                                  :name="row.name" :type="row.type" :object-id="row.object_id"></object-label>
+                      @contextmenu.prevent="col.key === 'name' && row.object_id && showContextMenu($event, row.object_id, row)">
+                    <template v-if="col.key === 'name' && row.object_id">
+                      <object-label :name="row.name" :type="row.type" :object-id="row.object_id"
+                                    :favorite="isFavorite(row.object_id)"></object-label>
+                    </template>
                     <span v-else-if="col.key === 'flag'" v-html="renderFlags(row[col.key])"></span>
                     <span v-else-if="isTimestampDisplayValue(row[col.key])" class="timestamp-display">{{ formatTimestampDisplay(row[col.key]) }}</span>
                     <template v-else>{{ row[col.key] ?? '' }}</template>
@@ -271,8 +273,9 @@
                 <thead><tr><th>Name</th><th>SAM</th><th>Domain</th><th>Type</th><th>Description</th></tr></thead>
                 <tbody>
                   <tr v-for="(m, mi) in sec.members" :key="mi">
-                    <td class="object-name-cell" @contextmenu.prevent="m.object_id && showContextMenu($event, m.object_id)">
-                      <object-label :name="m.name" :type="m.type" :object-id="m.object_id"></object-label>
+                    <td class="object-name-cell" @contextmenu.prevent="m.object_id && showContextMenu($event, m.object_id, m)">
+                      <object-label :name="m.name" :type="m.type" :object-id="m.object_id"
+                                    :favorite="m.object_id && isFavorite(m.object_id)"></object-label>
                     </td>
                     <td>{{ m.samaccountname }}</td>
                     <td>{{ m.domain }}</td>
@@ -300,8 +303,9 @@
                 <thead><tr><th>Name</th><th>SAM</th><th>Domain</th><th>Description</th><th>Flags</th><th>Is DC</th></tr></thead>
                 <tbody>
                   <tr v-for="(c, ci) in sec.computers" :key="ci">
-                    <td class="object-name-cell" @contextmenu.prevent="c.object_id && showContextMenu($event, c.object_id)">
-                      <object-label :name="c.name" :type="'computer'" :object-id="c.object_id"></object-label>
+                    <td class="object-name-cell" @contextmenu.prevent="c.object_id && showContextMenu($event, c.object_id, { name: c.name, type: 'computer', domain: c.domain, description: c.description })">
+                      <object-label :name="c.name" :type="'computer'" :object-id="c.object_id"
+                                    :favorite="c.object_id && isFavorite(c.object_id)"></object-label>
                     </td>
                     <td>{{ c.samaccountname }}</td>
                     <td>{{ c.domain }}</td>
@@ -312,6 +316,63 @@
                 </tbody>
               </table>
             </div>
+          </div>
+        </template>
+
+        <!-- Favorites -->
+        <template v-if="currentTab === 'favorites'">
+          <h2 style="margin:0 0 16px">收藏 <span style="font-size:13px;color:var(--text-light);font-weight:400">({{ favorites.length }})</span></h2>
+          <div v-if="!favorites.length" class="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+            <h2>暂无收藏</h2>
+            <p>在任意对象的名称上右键，选择"收藏"即可加入此列表</p>
+          </div>
+          <div v-else class="table-wrap">
+            <table class="data-table favorites-table">
+              <colgroup>
+                <col :style="favColStyle('name')">
+                <col :style="favColStyle('type')">
+                <col :style="favColStyle('domain')">
+                <col :style="favColStyle('description')">
+                <col :style="favColStyle('note')">
+                <col :style="favColStyle('added_at')">
+                <col :style="favColStyle('action')">
+              </colgroup>
+              <thead>
+                <tr>
+                  <th :style="favColStyle('name')"><span class="th-text">名称</span><div class="th-resize" @mousedown="onFavResizeStart('name', $event)"></div></th>
+                  <th :style="favColStyle('type')"><span class="th-text">类型</span><div class="th-resize" @mousedown="onFavResizeStart('type', $event)"></div></th>
+                  <th :style="favColStyle('domain')"><span class="th-text">域</span><div class="th-resize" @mousedown="onFavResizeStart('domain', $event)"></div></th>
+                  <th :style="favColStyle('description')"><span class="th-text">描述</span><div class="th-resize" @mousedown="onFavResizeStart('description', $event)"></div></th>
+                  <th :style="favColStyle('note')"><span class="th-text">备注</span><div class="th-resize" @mousedown="onFavResizeStart('note', $event)"></div></th>
+                  <th :style="favColStyle('added_at')"><span class="th-text">收藏时间</span><div class="th-resize" @mousedown="onFavResizeStart('added_at', $event)"></div></th>
+                  <th :style="favColStyle('action')"><span class="th-text">操作</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="f in favorites" :key="f.object_id">
+                  <td class="object-name-cell"
+                      @contextmenu.prevent="showContextMenu($event, f.object_id, f)">
+                    <object-label :name="f.name" :type="f.type" :object-id="f.object_id"></object-label>
+                  </td>
+                  <td>{{ f.type }}</td>
+                  <td>{{ f.domain }}</td>
+                  <td class="fav-desc-cell" :title="f.description || ''">{{ f.description || '' }}</td>
+                  <td>
+                    <textarea class="fav-note-input" rows="1" v-autoheight :value="f.note || ''"
+                              placeholder="添加备注..."
+                              @change="updateFavoriteNote(f.object_id, $event.target.value)"></textarea>
+                  </td>
+                  <td>{{ formatFavoriteTime(f.added_at) }}</td>
+                  <td>
+                    <button class="btn btn-icon btn-xs" style="color:var(--danger)"
+                            @click="removeFavorite(f.object_id)" title="移除收藏">✕</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </template>
 
@@ -358,9 +419,11 @@
           </button>
         </div>
         <div v-if="activeRelKey && currentDetail.relations[activeRelKey]" class="detail-rel-list">
-          <div v-for="(item, ii) in currentDetail.relations[activeRelKey]" :key="ii" class="detail-rel-item">
+          <div v-for="(item, ii) in currentDetail.relations[activeRelKey]" :key="ii" class="detail-rel-item"
+               @click="item.object_id && openDetail(item.object_id)">
             <object-label :name="item.name" :type="item.type" :object-id="item.object_id"
-                          @contextmenu.prevent.stop="item.object_id && showContextMenu($event, item.object_id)"></object-label>
+                          :favorite="item.object_id && isFavorite(item.object_id)"
+                          @contextmenu.prevent.stop="item.object_id && showContextMenu($event, item.object_id, item)"></object-label>
             <span v-if="item.meta" class="detail-rel-meta">{{ item.meta }}</span>
           </div>
         </div>
@@ -371,6 +434,7 @@
   <!-- ============ Context Menu ============ -->
   <div v-if="ctxMenu.visible" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }">
     <div class="ctx-menu-item" @click="ctxOpenDetail">查看详细信息</div>
+    <div class="ctx-menu-item" @click="ctxToggleFavorite">{{ ctxIsFavorite ? '取消收藏' : '收藏' }}</div>
   </div>
 
 </div>
