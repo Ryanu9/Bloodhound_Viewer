@@ -406,14 +406,33 @@ const app = createApp({
 
       const r = await api(`/datasets/${mergedId.value}/data/${currentTab.value}?${params}`);
       // first load: init hidden columns from default_visible
+      const firstLoad = !s.columns.length;
       if (r.columns.length) {
-        const firstLoad = !s.columns.length;
         r.columns.forEach(c => {
           if (firstLoad && !c.default_visible) s.hiddenKeys.add(c.key);
           if (!colWidths[c.key]) colWidths[c.key] = inferDefaultColumnWidth(c);
         });
       }
-      s.columns = r.columns;
+      // Preserve user-adjusted column order across refetch: reuse existing order when keys match,
+      // append any new columns from server, drop removed ones.
+      if (!firstLoad && r.columns.length) {
+        const serverByKey = new Map(r.columns.map((c) => [c.key, c]));
+        const reordered = [];
+        const seen = new Set();
+        for (const prev of s.columns) {
+          const fresh = serverByKey.get(prev.key);
+          if (fresh) {
+            reordered.push(fresh);
+            seen.add(prev.key);
+          }
+        }
+        for (const c of r.columns) {
+          if (!seen.has(c.key)) reordered.push(c);
+        }
+        s.columns = reordered;
+      } else {
+        s.columns = r.columns;
+      }
       s.rows = r.rows;
       s.total = r.total;
       s.page = r.page;
